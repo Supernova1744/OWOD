@@ -117,7 +117,7 @@ def test_suppress_off():
 
 def test_check_all_parts_drops_part_without_same_label_parent():
     img = Image.new("RGB", (300, 300))
-    boxes = [Box(0, 0, 200, 200, 0.9, "bus"), Box(60, 60, 100, 100, 0.8, "headlight")]
+    boxes = [Box(20, 20, 220, 220, 0.9, "bus"), Box(60, 60, 100, 100, 0.8, "headlight")]
     clf = LabelClassifier(["bus", "car"])
     res = classify_detections(img, boxes, clf, PipelineConfig(square="none"))                       # default: candidates only
     assert [r.part_of for r in res] == [None, None]
