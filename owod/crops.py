@@ -89,8 +89,13 @@ def geometric_multi(g: Group, dominance_thr: float = 0.5, min_inner: int = 2) ->
 
 @dataclass(frozen=True)
 class CropRect:
-    rect: Tuple[int, int, int, int]   # crop area; may extend outside the image when square=True
-    clip: Tuple[int, int, int, int]   # part of rect that lies inside the image
+    clip: Tuple[int, int, int, int]      # image region that is cut (always inside the image)
+    canvas: Tuple[int, int]              # output size (w, h); larger than clip when gray padding is added
+    offset: Tuple[int, int]              # where the cut region sits inside the canvas
+
+    @property
+    def padded(self):
+        return self.canvas != (self.clip[2] - self.clip[0], self.clip[3] - self.clip[1])
 
 
 def _grow_to(lo, hi, side):
@@ -99,8 +104,16 @@ def _grow_to(lo, hi, side):
 
 
 def crop_rect(box: Box, img_w: int, img_h: int, margin: float = 0.1, pad_px: float = 8,
-              square: bool = False, min_side: int = 0) -> CropRect:
+              square="pad", min_side: int = 0) -> CropRect:
+    """Context = margin*size + pad_px taken from the IMAGE on each side, then clipped.
+    square: "none"/False = keep the clipped shape.
+            "pad"/True   = pad the clipped region with gray bars to a centered square. No new image pixels,
+                           so neighbors of a tall or wide object are NOT pulled into the crop.
+            "context"    = make the rect square in image coordinates (pulls in neighbors); gray only outside the image."""
     _check(box)
+    mode = {True: "pad", False: "none", None: "none"}.get(square, square)
+    if mode not in ("none", "pad", "context"):
+        raise ValueError(f"unknown square mode {square!r}")
     dx, dy = margin * box.w + pad_px, margin * box.h + pad_px
     x1, y1, x2, y2 = box.x1 - dx, box.y1 - dy, box.x2 + dx, box.y2 + dy
     if min_side:
@@ -108,24 +121,29 @@ def crop_rect(box: Box, img_w: int, img_h: int, margin: float = 0.1, pad_px: flo
             x1, x2 = _grow_to(x1, x2, min_side)
         if y2 - y1 < min_side:
             y1, y2 = _grow_to(y1, y2, min_side)
-    if square:
-        s = max(x2 - x1, y2 - y1)
-        x1, x2 = _grow_to(x1, x2, s)
-        y1, y2 = _grow_to(y1, y2, s)
+    if mode == "context":
+        side = max(x2 - x1, y2 - y1)
+        x1, x2 = _grow_to(x1, x2, side)
+        y1, y2 = _grow_to(y1, y2, side)
     rect = (math.floor(x1), math.floor(y1), math.ceil(x2), math.ceil(y2))
     clip = (max(0, rect[0]), max(0, rect[1]), min(img_w, rect[2]), min(img_h, rect[3]))
     if clip[2] <= clip[0] or clip[3] <= clip[1]:
         raise ValueError("crop lies outside the image")
-    return CropRect(rect=clip if not square else rect, clip=clip)
+    cw, ch = clip[2] - clip[0], clip[3] - clip[1]
+    if mode == "context":
+        return CropRect(clip, (rect[2] - rect[0], rect[3] - rect[1]), (clip[0] - rect[0], clip[1] - rect[1]))
+    if mode == "pad":
+        s = max(cw, ch)
+        return CropRect(clip, (s, s), ((s - cw) // 2, (s - ch) // 2))
+    return CropRect(clip, (cw, ch), (0, 0))
 
 
 def cut_crop(image, cr: CropRect, fill=(114, 114, 114)):
-    """PIL crop. Square crops that leave the image are letterboxed with `fill`, not stretched."""
+    """PIL crop. When the canvas is larger than the cut region the rest is `fill`, never stretched."""
     from PIL import Image
     part = image.crop(cr.clip)
-    if cr.rect == cr.clip:
+    if not cr.padded:
         return part
-    w, h = cr.rect[2] - cr.rect[0], cr.rect[3] - cr.rect[1]
-    canvas = Image.new("RGB", (w, h), fill)
-    canvas.paste(part, (cr.clip[0] - cr.rect[0], cr.clip[1] - cr.rect[1]))
+    canvas = Image.new("RGB", cr.canvas, fill)
+    canvas.paste(part, cr.offset)
     return canvas

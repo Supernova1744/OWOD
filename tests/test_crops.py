@@ -37,22 +37,30 @@ def test_zero_area_box_rejected():  # C4
 
 
 def test_crop_rect_margin_pad_and_clip():  # C1
-    r = crop_rect(B(100, 100, 200, 200), 1000, 1000, margin=0.1, pad_px=5)
-    assert r.rect == (85, 85, 215, 215) and r.clip == r.rect
-    r = crop_rect(B(0, 0, 50, 50), 100, 100, margin=0.2, pad_px=0)
-    assert r.rect == (0, 0, 60, 60)
+    r = crop_rect(B(100, 100, 200, 200), 1000, 1000, margin=0.1, pad_px=5, square="none")
+    assert r.clip == (85, 85, 215, 215) and r.canvas == (130, 130) and not r.padded
+    r = crop_rect(B(0, 0, 50, 50), 100, 100, margin=0.2, pad_px=0, square="none")
+    assert r.clip == (0, 0, 60, 60)
 
 
-def test_crop_rect_square_letterbox():  # C2
-    r = crop_rect(B(0, 0, 100, 40), 200, 200, margin=0.0, pad_px=0, square=True)
-    x1, y1, x2, y2 = r.rect
-    assert x2 - x1 == y2 - y1 == 100
-    assert y1 < 0 and r.clip == (0, 0, 100, 40 + 30)  # extends 30 px below the box, inside the image
+def test_crop_rect_square_pad_adds_no_image_pixels():  # C2 pad
+    r = crop_rect(B(0, 0, 100, 40), 200, 200, margin=0.0, pad_px=0, square="pad")
+    assert r.clip == (0, 0, 100, 40) and r.canvas == (100, 100) and r.offset == (0, 30) and r.padded
+
+
+def test_crop_rect_square_context_pulls_in_image():  # C2 context
+    r = crop_rect(B(0, 0, 100, 40), 200, 200, margin=0.0, pad_px=0, square="context")
+    assert r.canvas == (100, 100) and r.clip == (0, 0, 100, 70) and r.offset == (0, 30)
+
+
+def test_crop_rect_bad_mode():
+    with pytest.raises(ValueError):
+        crop_rect(B(0, 0, 10, 10), 100, 100, square="round")
 
 
 def test_crop_rect_min_side():  # C3
-    r = crop_rect(B(100, 100, 110, 110), 1000, 1000, margin=0.0, pad_px=0, min_side=32)
-    assert r.rect[2] - r.rect[0] >= 32 and r.rect[3] - r.rect[1] >= 32
+    r = crop_rect(B(100, 100, 110, 110), 1000, 1000, margin=0.0, pad_px=0, min_side=32, square="none")
+    assert r.canvas[0] >= 32 and r.canvas[1] >= 32
 
 
 def _cluster():

@@ -17,12 +17,25 @@ class FakeClassifier:
         return Verdict("thing", False, None, 0.1)
 
 
-def test_cut_crop_square_letterbox_size_and_fill():  # C2
+def test_cut_crop_pad_size_and_fill():  # C2
     img = Image.new("RGB", (100, 40), (255, 0, 0))
-    cr = crop_rect(Box(0, 0, 100, 40), 100, 40, margin=0, pad_px=0, square=True)
+    cr = crop_rect(Box(0, 0, 100, 40), 100, 40, margin=0, pad_px=0, square="pad")
     out = cut_crop(img, cr, fill=(1, 2, 3))
     assert out.size == (100, 100)
     assert out.getpixel((50, 50)) == (255, 0, 0) and out.getpixel((50, 2)) == (1, 2, 3)
+
+
+def test_tall_box_in_busy_image_gets_gray_bars_not_neighbors():  # advisor: neighbors must stay out
+    img = Image.new("RGB", (400, 300), (255, 0, 0))                    # red = neighbors everywhere
+    for y in range(50, 250):
+        for x in range(180, 220):
+            img.putpixel((x, y), (0, 255, 0))                            # green = the tall object
+    cr = crop_rect(Box(180, 50, 220, 250), 400, 300, margin=0, pad_px=0, square="pad")
+    out = cut_crop(img, cr, fill=(1, 2, 3))
+    assert out.size == (200, 200)
+    colors = {out.getpixel((x, y)) for x in (2, 197) for y in (2, 100, 197)}
+    assert colors == {(1, 2, 3)}                                         # left and right bars are gray, no red
+    assert out.getpixel((100, 100)) == (0, 255, 0)
 
 
 def test_clamp_box():
@@ -34,7 +47,7 @@ def test_pipeline_groups_crops_and_ids():  # T17
     img = Image.new("RGB", (400, 300), (10, 10, 10))
     boxes = [Box(10, 10, 110, 110, 0.9, "a"), Box(12, 12, 110, 110, 0.5, "a2"), Box(200, 100, 300, 200, 0.8, "b")]
     clf = FakeClassifier()
-    res = classify_detections(img, boxes, clf, PipelineConfig(square=False, margin=0.1, pad_px=0, min_side=0))
+    res = classify_detections(img, boxes, clf, PipelineConfig(square="none", margin=0.1, pad_px=0, min_side=0))
     assert [r.box.id for r in res] == ["a", "b"]
     assert res[0].member_ids == ["a", "a2"]
     assert clf.seen[0][0] == (120, 120)         # 100 + 2 * 10% margin

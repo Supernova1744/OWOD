@@ -13,7 +13,7 @@ class PipelineConfig:
     dominance_thr: float = 0.5
     margin: float = 0.1
     pad_px: float = 8
-    square: bool = True
+    square: str = "pad"       # "pad" (gray bars), "context" (more image), "none"
     min_side: int = 48
     min_score: float = 0.0
     max_crops: Optional[int] = None

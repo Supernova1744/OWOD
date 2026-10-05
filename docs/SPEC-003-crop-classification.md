@@ -15,13 +15,13 @@ A crop with several objects and no main object is `unknown`. imajev runs as a Py
 ## Requirements
 ### Grouping (CPU, pure Python)
 - G1: Two boxes with IoU >= iou_thr belong to one group.
-- G2: A box with at least contain_thr of its area inside another box belongs to that group only if the IoU rule also holds. Smaller boxes inside a large box stay separate groups. They are "inner" boxes of the large one.
+- G2: Smaller boxes inside a large box stay separate groups. They are "inner" boxes of the large one (inner_thr = part of the small box inside the large one).
 - G3: The representative is the highest-score box. Output order is by score, descending.
 - G4: Grouping is deterministic and has no random choice.
 
 ### Crop geometry (CPU, pure Python)
 - C1: expand(box, margin, pad_px) grows each side by margin*size + pad_px, then clips to the image.
-- C2: With square=True the crop becomes square before clipping. Parts outside the image are filled with fill_color (letterbox), not stretched.
+- C2: square="pad" (default): cut the margin-expanded region from the image, clip it, then add gray bars to make a centered square. No new image pixels are added, so neighbors of a tall or wide object stay out of the crop. square="context": make the rect square in image coordinates (pulls in neighbors; gray only outside the image). square="none": keep the clipped shape.
 - C3: A crop smaller than min_side px is grown to min_side around its center (clipped to the image).
 - C4: An image with zero or negative box area is rejected with ValueError.
 
@@ -32,8 +32,8 @@ A crop with several objects and no main object is `unknown`. imajev runs as a Py
 - M4: If the crop is multi or has no clear object (p(no_clear) >= none_hi), the class question is skipped and the verdict is `unknown`.
 
 ### Class decision
-- D1: Ask one choice question with the known classes plus `none of these`. More than 254 classes are split in chunks of 254. The best class is the highest chunk probability. The verdict is "none of these" only if every chunk says so: p_none = min over chunks.
-- D2: Verdict is known when the model did not abstain, p(top) >= min_conf, and p(none of these) < none_max. Else unknown with a reason: `multi_object`, `no_clear_object`, `not_in_known`, `low_confidence`, `abstained`.
+- D1: Ask one choice question with the known classes plus `none of these`. Chunk size = max_options - 1 from the loaded engine (255 for imajev-4b, 254 for 2b/9b). The best class is the highest chunk probability. The verdict is "none of these" only if every chunk says so: p_none = min over chunks.
+- D2: imajev removes its own "can't tell" mass before it reports class probabilities. The classifier therefore uses eff = p(top) * (1 - unknown_probability of that chunk). Verdict is known when the model did not abstain, eff >= min_conf, unknown_probability < unknown_max, and p(none of these) < none_max. A scene answer with unknown_probability >= unknown_max counts as an abstention (geometry hint only). Else unknown with a reason: `multi_object`, `no_clear_object`, `not_in_known`, `low_confidence`, `abstained`.
 - D3: Every verdict carries unknown_score = p(none of these) (or 1.0 for multi / no_clear) and the raw probabilities.
 
 ### Engine

@@ -22,13 +22,13 @@ def main():
     p.add_argument("--top", type=int, default=30, help="max crops per image")
     p.add_argument("--min-score", type=float, default=0.0)
     p.add_argument("--margin", type=float, default=0.1); p.add_argument("--pad", type=float, default=8)
-    p.add_argument("--no-square", action="store_true"); p.add_argument("--save-crops", action="store_true")
+    p.add_argument("--square", choices=("pad", "context", "none"), default="pad"); p.add_argument("--save-crops", action="store_true")
     a = p.parse_args()
     known = [c.strip() for c in (a.classes.split(",") if a.classes else Path(a.classes_file).read_text().splitlines()) if c.strip()]
     engine = ImajevEngine(a.imajev_dir, rotations=a.rotations, fast=a.fast)
     print(f"imajev loaded in {engine.load_seconds:.1f}s; calibration={'yes' if engine.calibration else 'no'}")
-    clf = CropClassifier(engine, known, Config())
-    cfg = PipelineConfig(margin=a.margin, pad_px=a.pad, square=not a.no_square, min_score=a.min_score, max_crops=a.top)
+    clf = CropClassifier(engine, known, Config(), max_options=engine.max_options)
+    cfg = PipelineConfig(margin=a.margin, pad_px=a.pad, square=a.square, min_score=a.min_score, max_crops=a.top)
     out_dir = Path(a.out); out_dir.mkdir(parents=True, exist_ok=True)
     report = []
     for item in json.loads(Path(a.boxes).read_text()):
@@ -48,7 +48,7 @@ def main():
         img.save(out_dir / f"{stem}_overlay.png")
         report.append({"image": item["image"], "crops": [{
             "index": r.index, "box": [r.box.x1, r.box.y1, r.box.x2, r.box.y2, r.box.score], "members": len(r.member_ids),
-            "rect": list(r.rect.rect), "geometric_multi": r.geometric_multi, "label": r.verdict.label,
+            "clip": list(r.rect.clip), "canvas": list(r.rect.canvas), "geometric_multi": r.geometric_multi, "label": r.verdict.label,
             "is_unknown": r.verdict.is_unknown, "reason": r.verdict.reason, "unknown_score": r.verdict.unknown_score,
             "scene": r.verdict.scene_probs, "top_classes": sorted(r.verdict.class_probs.items(), key=lambda kv: -kv[1])[:3]}
             for r in results]})

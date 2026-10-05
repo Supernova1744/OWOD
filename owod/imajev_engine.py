@@ -34,6 +34,7 @@ class ImajevEngine:
                                              max_input_tokens=max_input_tokens, fast=fast)
         self.backend.model = model_name
         self.load_seconds = perf_counter() - t0
+        self.max_options = int(getattr(self.backend, "max_options", 254))
         self.calibration = None
         if calibration:
             cal = (adapter_dir / ("calibration-rot4.json" if rotations == 4 else "calibration.json")
