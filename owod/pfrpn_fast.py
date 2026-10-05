@@ -1,4 +1,12 @@
-"""Exact speedup of PF-RPN's pseudo-text builder (no retraining, same maths).
+"""Exact speedups for PF-RPN (no retraining, same results).
+
+RESULT OF THE FIRST GPU TEST: apply_fast_moe gives NO speedup. The router picks the biggest feature map (level 0) for
+every test image, so the full O(N^2) pooling over ~16.7k tokens still has to run. Kept for reference; do not enable it.
+apply_fast_predict is the useful one: PFRPN.predict loops `int(label)` over 900 GPU labels (900 host syncs, ~990 per
+image in total, the main cause of ~105 ms GPU idle time). It only builds label names, so one .tolist() does the same.
+
+--- original notes on the MoE rewrite ---
+Exact speedup of PF-RPN's pseudo-text builder (no retraining, same maths).
 
 Why: profiling shows _build_sparse_moe_pseudo_text takes ~35% of the time (162 of 467 ms). It runs
 AttentionPool2d self-attention over ALL tokens of ALL 4 feature levels (the biggest map has ~16,700 tokens, so that
@@ -73,4 +81,28 @@ def apply_fast_moe(model):
     """Replace the method on this model instance. Returns the original bound method so a test can compare."""
     original = model._build_sparse_moe_pseudo_text
     model._build_sparse_moe_pseudo_text = types.MethodType(fast_build_sparse_moe_pseudo_text, model)
+    return original
+
+
+def fast_predict(self, batch_inputs, batch_data_samples, rescale=True):
+    """PFRPN.predict without the per-label host syncs. Same outputs, same label_names."""
+    visual_feats = self.extract_feat(batch_inputs)
+    text_dict = {}
+    entity = ["object"]
+    for data_samples in batch_data_samples:
+        data_samples.token_positive_map = [1]
+    head_inputs_dict = self.forward_transformer(visual_feats, text_dict, batch_data_samples)
+    results_list = self.bbox_head.predict(**head_inputs_dict, rescale=rescale, batch_data_samples=batch_data_samples)
+    for data_sample, pred_instances in zip(batch_data_samples, results_list):
+        if len(pred_instances) > 0:
+            pred_instances.label_names = [entity[i] if i < len(entity) else "unobject"
+                                          for i in pred_instances.labels.tolist()]    # ONE sync
+        data_sample.pred_instances = pred_instances
+    return batch_data_samples
+
+
+def apply_fast_predict(model):
+    """Replace predict on this model instance. Returns the original bound method."""
+    original = model.predict
+    model.predict = types.MethodType(fast_predict, model)
     return original

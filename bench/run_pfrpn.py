@@ -85,6 +85,7 @@ def main():
     p.add_argument("--fp16", action="store_true"); p.add_argument("--bf16", action="store_true")
     p.add_argument("--tf32", action="store_true", help="allow TF32 matmul")
     p.add_argument("--stages", action="store_true", help="also report per-stage median ms")
+    p.add_argument("--fast-predict", action="store_true", help="owod.pfrpn_fast.apply_fast_predict (same results, no per-label syncs)")
     p.add_argument("--runs", type=int, default=50); p.add_argument("--warmup", type=int, default=10)
     a = p.parse_args()
 
@@ -104,6 +105,9 @@ def main():
         cfg.model.topk = a.topk
     init_default_scope("mmdet")
     model = init_detector(cfg, a.ckpt, device="cuda").eval()   # always load with the trained 900 queries
+    if a.fast_predict:
+        from owod.pfrpn_fast import apply_fast_predict
+        apply_fast_predict(model)
     if a.num_queries:
         shrink_queries(model, a.num_queries)
 
@@ -129,7 +133,7 @@ def main():
            "knobs": {"num_queries": int(model.num_queries),
                      "sp_iter_num": int(getattr(model, "sp_iter_num", -1)),
                      "topk": int(getattr(model, "topk", -1)),
-                     "scale": list(a.scale), "fp16": a.fp16, "bf16": a.bf16, "tf32": a.tf32},
+                     "scale": list(a.scale), "fp16": a.fp16, "bf16": a.bf16, "tf32": a.tf32, "fast_predict": a.fast_predict},
            "latency": summarize(lat), "img_size": list(a.img_size),
            "gpu": torch.cuda.get_device_name(0), "torch": torch.__version__,
            "mmdet_file": __import__("mmdet").__file__}

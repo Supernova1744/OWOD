@@ -33,6 +33,7 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--config", required=True); p.add_argument("--ckpt", required=True); p.add_argument("--out", required=True)
     p.add_argument("--fp16", action="store_true"); p.add_argument("--tf32", action="store_true")
+    p.add_argument("--fast-predict", action="store_true"); p.add_argument("--fast-moe", action="store_true")
     p.add_argument("--img-size", type=int, nargs=2, default=[800, 1333]); p.add_argument("--runs", type=int, default=20)
     a = p.parse_args()
     if a.tf32:
@@ -44,6 +45,12 @@ def main():
     from mmdet.apis.inference import get_test_pipeline_cfg
     cfg = Config.fromfile(a.config); init_default_scope("mmdet")
     model = init_detector(cfg, a.ckpt, device="cuda").eval()
+    if a.fast_predict or a.fast_moe:
+        from owod.pfrpn_fast import apply_fast_moe, apply_fast_predict
+        if a.fast_predict:
+            apply_fast_predict(model)
+        if a.fast_moe:
+            apply_fast_moe(model)
     pc = get_test_pipeline_cfg(cfg); pc[0].type = "mmdet.LoadImageFromNDArray"
     pipe = Compose([t for t in pc if t["type"] != "LoadAnnotations"])
     img = (np.random.rand(*a.img_size, 3) * 255).astype("uint8")
@@ -78,8 +85,10 @@ def main():
         return getattr(r, "self_device_time_total", getattr(r, "self_cuda_time_total", 0)) / 1000.0
     top_gpu = [{"op": r.key, "calls": r.count, "self_gpu_ms": round(dev(r), 2), "self_cpu_ms": round(r.self_cpu_time_total / 1000.0, 2)} for r in rows]
     syncs = [{"op": r.key, "calls": r.count, "cpu_ms": round(r.cpu_time_total / 1000.0, 2)} for r in avg if r.key in SYNC_OPS]
-    gpu_busy_ms = sum(dev(r) for r in avg)
-    res = {"total_ms_median": float(np.median(totals)), "knobs": {"fp16": a.fp16, "tf32": a.tf32, "img": list(a.img_size)},
+    from torch.autograd import DeviceType
+    # key_averages lists each kernel twice (under its aten op and as a kernel row): count kernel rows only
+    gpu_busy_ms = sum(dev(r) for r in avg if getattr(r, "device_type", None) == DeviceType.CUDA)
+    res = {"total_ms_median": float(np.median(totals)), "knobs": {"fp16": a.fp16, "tf32": a.tf32, "fast_predict": a.fast_predict, "fast_moe": a.fast_moe, "img": list(a.img_size)},
            "inclusive_ms_median": inclusive, "gpu_busy_ms_one_run": round(gpu_busy_ms, 1),
            "top_ops_by_self_gpu": top_gpu, "sync_like_ops": syncs, "gpu": torch.cuda.get_device_name(0)}
     os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)

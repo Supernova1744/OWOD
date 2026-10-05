@@ -36,7 +36,8 @@ def main():
     run(files[0])                       # warm-up
     levels, counts = {}, collections.Counter()
     def show(message, category, filename, lineno, file=None, line=None):
-        counts[f"{filename}:{lineno}"] += 1
+        if "synchroniz" in str(message).lower():        # skip unrelated warnings
+            counts[f"{filename}:{lineno}"] += 1
     old = warnings.showwarning; warnings.showwarning = show; warnings.simplefilter("always")
     for i, f in enumerate(files):
         if i == 0:
