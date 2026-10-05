@@ -21,6 +21,8 @@ class PipelineConfig:
     part_inside_thr: float = 0.8     # part of the small box inside the large box
     part_area_ratio: float = 0.7     # small box area / large box area must be below this
     confirm_parts: bool = True       # ask the model "whole or part?" before dropping (needs classifier.is_part)
+    check_all_parts: bool = False    # ask "whole or part?" for EVERY known crop, not only geometric candidates (+1 pass each).
+                                     # Catches parts whose bigger object has another label (headlight labelled "car" on a bus).
 
 
 @dataclass
@@ -69,7 +71,8 @@ def classify_detections(image, boxes: Sequence[Box], classifier: CropClassifier,
 
 def _suppress_parts(results, crops, classifier, cfg):
     """A known crop that lies inside a larger crop with the SAME label is a part candidate (eye in a person,
-    window in a bus). Geometry only proposes; the model confirms (is_part) when confirm_parts is on."""
+    window in a bus). Geometry only proposes; the model confirms (is_part) when confirm_parts is on.
+    With check_all_parts the model is asked for every known crop; a part with no detected parent gets part_of = -1."""
     ask = getattr(classifier, "is_part", None) if cfg.confirm_parts else None
     for r in results:
         if r.verdict.is_unknown:
@@ -78,10 +81,10 @@ def _suppress_parts(results, crops, classifier, cfg):
                   and o.verdict.label == r.verdict.label and o.box.area > 0
                   and r.box.area / o.box.area < cfg.part_area_ratio
                   and inside_fraction(r.box, o.box) >= cfg.part_inside_thr]
-        if not outers:
+        if not outers and not (cfg.check_all_parts and ask is not None):
             continue
         if ask is not None:
             is_part, r.p_part = ask(crops[r.index])
             if not is_part:
                 continue
-        r.part_of = min(outers, key=lambda o: o.box.area).index
+        r.part_of = min(outers, key=lambda o: o.box.area).index if outers else -1

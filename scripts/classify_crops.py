@@ -25,13 +25,14 @@ def main():
     p.add_argument("--square", choices=("pad", "context", "none"), default="pad"); p.add_argument("--save-crops", action="store_true")
     p.add_argument("--no-verify", action="store_true", help="skip the is-it-really-a-<label> check")
     p.add_argument("--keep-parts", action="store_true", help="do not suppress part crops")
+    p.add_argument("--check-all-parts", action="store_true", help="ask whole-or-part for every known crop (+1 pass each)")
     a = p.parse_args()
     known = [c.strip() for c in (a.classes.split(",") if a.classes else Path(a.classes_file).read_text().splitlines()) if c.strip()]
     engine = ImajevEngine(a.imajev_dir, rotations=a.rotations, fast=a.fast)
     print(f"imajev loaded in {engine.load_seconds:.1f}s; calibration={'yes' if engine.calibration else 'no'}")
     clf = CropClassifier(engine, known, Config(verify=not a.no_verify), max_options=engine.max_options)
     cfg = PipelineConfig(margin=a.margin, pad_px=a.pad, square=a.square, min_score=a.min_score, max_crops=a.top,
-                         suppress_parts=not a.keep_parts)
+                         suppress_parts=not a.keep_parts, check_all_parts=a.check_all_parts)
     out_dir = Path(a.out); out_dir.mkdir(parents=True, exist_ok=True)
     report = []
     for item in json.loads(Path(a.boxes).read_text()):
