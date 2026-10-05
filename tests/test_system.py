@@ -162,3 +162,37 @@ def test_recovered_split_new_vs_old_and_no_duplicates(tmp_path):  # advisor 4 6
     blue = next(r["id"] for r in sysm.store.records.values() if r["box"][0] == 150)
     out = sysm.learn("bird", ids=[blue])
     assert out["recovered_new_class"] == 1 and out["recovered_old_class"] == 0
+
+
+def test_same_pixels_from_another_path_is_not_duplicated(tmp_path):  # K bug found on the machine
+    import shutil
+    sysm, path = build(tmp_path, [])
+    sysm.process_image(path)
+    n = len(sysm.store.records)
+    copy = str(tmp_path / "copy_of_a.png")
+    shutil.copy(path, copy)
+    sysm.process_image(copy)
+    assert len(sysm.store.records) == n
+
+
+class DriftScorer(ColorScorer):
+    """After 'bird' exists, the blue crop is called 'cat' (an old class)."""
+    def ask(self, image, payload):
+        name = next(iter(payload["questions"]))
+        if name.startswith("classes_") and image.getpixel((0, 0)) == BLUE and "bird" in payload["questions"][name]["criteria"]:
+            crit = payload["questions"][name]["criteria"]
+            return self._choice({k: (1.0 if k == "cat" else 0.0) for k in crit}, name)
+        return super().ask(image, payload)
+
+
+def test_learn_ignores_old_class_drift_unless_asked(tmp_path):
+    for accept, expect_old in ((False, 0), (True, 1)):
+        sub = tmp_path / str(accept); sub.mkdir()
+        sysm, path = build(sub, [])
+        sysm.scorer = DriftScorer(); sysm._rebuild()
+        sysm.process_image(path)
+        cyan = next(r["id"] for r in sysm.store.records.values() if r["box"][0] == 280)
+        blue = next(r["id"] for r in sysm.store.records.values() if r["box"][0] == 150)
+        out = sysm.learn("bird", ids=[cyan], accept_old_class=accept)
+        assert out["recovered_old_class"] == expect_old
+        assert sysm.store.get(blue)["status"] == ("recovered" if accept else "unknown")

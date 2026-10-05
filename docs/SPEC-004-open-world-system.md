@@ -21,6 +21,8 @@ Decision (user): PF-RPN runs about 3.7x slower than a standard RPN (fp16, fast p
 - S5 Detector process: PF-RPN needs Python 3.10 and its own venv; imajev needs 3.11. The detector runs as a subprocess
   that returns boxes as JSON. It is called once per batch of images.
 - S6 Metric U-Recall: share of ground-truth unknown objects covered (IoU >= 0.5) by at least one predicted unknown box.
+- S3b Dedupe by image CONTENT (file hash) and box, not by path. The same pixels from another path add no records.
+- S4b A stored unknown is recovered only if it now matches the NEW class. Switches to old classes (drift from the longer option list) stay unknown unless accept_old_class is set.
 - S7 Nothing in the system opens a network port.
 
 ## Acceptance tests

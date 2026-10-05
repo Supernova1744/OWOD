@@ -1,4 +1,5 @@
 """PF-RPN proposals -> imajev crop verdicts -> unknown store -> learn new classes without training. See SPEC-004."""
+import hashlib
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Sequence
 
@@ -32,24 +33,28 @@ class OpenWorldSystem:
             found = boxes.get(str(Path(p).resolve()), boxes.get(str(p)))
             if found is None:
                 raise KeyError(f"detector returned no entry for {p}")
-            out[str(p)] = self._classify_image(Image.open(p).convert("RGB"), str(p), found)
+            key = hashlib.sha1(Path(p).read_bytes()).hexdigest()       # same pixels from another path = same image
+            out[str(p)] = self._classify_image(Image.open(p).convert("RGB"), str(p), found, key)
         return out
 
     def process_image(self, path: str):
         return self.process_many([path])[str(path)]
 
-    def _classify_image(self, image, name: str, boxes) -> List[CropResult]:
+    def _classify_image(self, image, name: str, boxes, key: Optional[str] = None) -> List[CropResult]:
         crops = {}
         results = classify_detections(image, boxes, self.classifier, self.pc, on_crop=lambda r, c: crops.__setitem__(r.index, c))
         for r in results:
             if r.verdict.is_unknown and r.part_of is None:       # suppressed parts are never stored
                 b = r.box
-                if self.store.find(name, (b.x1, b.y1, b.x2, b.y2)) is not None:
+                if self.store.find(key or name, (b.x1, b.y1, b.x2, b.y2)) is not None:
                     continue                                    # same image and box seen before: no duplicate record
-                self.store.add(crops[r.index], name, (b.x1, b.y1, b.x2, b.y2, b.score), r.verdict.reason, r.verdict.unknown_score)
+                self.store.add(crops[r.index], name, (b.x1, b.y1, b.x2, b.y2, b.score), r.verdict.reason, r.verdict.unknown_score,
+                               image_key=key)
         return results
 
-    def learn(self, name: str, ids: Sequence[int] = (), relabel: bool = True) -> dict:
+    def learn(self, name: str, ids: Sequence[int] = (), relabel: bool = True, accept_old_class: bool = False) -> dict:
+        """accept_old_class=False: a stored unknown is recovered only if it now matches the NEW class. Switches to an
+        old class are side effects of the longer option list (drift), so they stay unknown unless asked for."""
         for rid in ids:
             if self.store.get(rid)["status"] != "unknown":
                 raise ValueError(f"record {rid} is not unknown")
@@ -63,7 +68,7 @@ class OpenWorldSystem:
         if relabel:
             for rid in self.store.ids("unknown", RELABEL_REASONS):
                 v = self.classifier.classify(self.store.crop(rid), geometric_multi=False)
-                if not v.is_unknown:
+                if not v.is_unknown and (v.label == name or accept_old_class):
                     self.store.mark(rid, "recovered", v.label)
                     recovered[rid] = v.label
         new = {k: v for k, v in recovered.items() if v == name}

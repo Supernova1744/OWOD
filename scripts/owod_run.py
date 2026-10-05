@@ -40,7 +40,7 @@ def main():
     r.add_argument("--top", type=int, default=30); r.add_argument("--scale", type=int, nargs=2, default=[800, 1333]); r.add_argument("--report", default=None); engine_args(r)
     l = sub.add_parser("list"); l.add_argument("--store", required=True); l.add_argument("--status", default="unknown")
     n = sub.add_parser("learn"); n.add_argument("--state", required=True); n.add_argument("--store", required=True)
-    n.add_argument("--name", required=True); n.add_argument("--ids", default=""); n.add_argument("--no-relabel", action="store_true")
+    n.add_argument("--name", required=True); n.add_argument("--ids", default=""); n.add_argument("--no-relabel", action="store_true"); n.add_argument("--accept-old-class", action="store_true")
     engine_args(n)
     a = ap.parse_args()
 
@@ -75,7 +75,7 @@ def main():
     if a.cmd == "learn":
         system, state = make_system(a, lambda paths: {})
         ids = [int(x) for x in a.ids.split(",") if x.strip()]
-        res = system.learn(a.name, ids, relabel=not a.no_relabel)
+        res = system.learn(a.name, ids, relabel=not a.no_relabel, accept_old_class=a.accept_old_class)
         state.save(a.state)
         print(json.dumps(res, indent=1))
 
