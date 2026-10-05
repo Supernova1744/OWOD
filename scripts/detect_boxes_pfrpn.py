@@ -12,7 +12,9 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--config", default="configs/pf-rpn/pf-rpn_coco-imagenet.py")
     p.add_argument("--ckpt", default="checkpoints/pf_rpn_swinb_5p_coco_imagenet.pth")
-    p.add_argument("--images", required=True); p.add_argument("--out", required=True)
+    p.add_argument("--images"); p.add_argument("--list", help="text file with one image path per line")
+    p.add_argument("--out", required=True)
+    p.add_argument("--fast-predict", action="store_true"); p.add_argument("--scale", type=int, nargs=2, default=[800, 1333])
     p.add_argument("--top", type=int, default=100); p.add_argument("--fp16", action="store_true")
     a = p.parse_args()
     from mmengine.config import Config
@@ -25,9 +27,19 @@ def main():
     init_default_scope("mmdet")
     model = init_detector(cfg, a.ckpt, device="cuda").eval()
     pc = get_test_pipeline_cfg(cfg); pc[0].type = "mmdet.LoadImageFromNDArray"
-    pipeline = Compose([t for t in pc if t["type"] != "LoadAnnotations"])
-    root = Path(a.images)
-    files = sorted(f for f in ([root] if root.is_file() else root.iterdir()) if f.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp"})
+    pc = [t for t in pc if t["type"] != "LoadAnnotations"]
+    for t in pc:
+        if "Resize" in t["type"]:
+            t["scale"] = tuple(a.scale)
+    pipeline = Compose(pc)
+    if a.fast_predict:
+        from owod.pfrpn_fast import apply_fast_predict
+        apply_fast_predict(model)
+    if a.list:
+        files = [Path(x) for x in Path(a.list).read_text().split("\n") if x.strip()]
+    else:
+        root = Path(a.images)
+        files = sorted(f for f in ([root] if root.is_file() else root.iterdir()) if f.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp"})
     out = []
     for f in files:
         img = np.array(Image.open(f).convert("RGB"))[:, :, ::-1].copy()   # mmdet expects BGR
