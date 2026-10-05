@@ -14,7 +14,8 @@ unknown-object proposer in an OWOD system (later specs).
 - R2: Use warm-up runs. Exclude them. Call `cuda.synchronize()` around each timed run.
 - R3: Report the median, p90, and min of N runs. N is at least 50.
 - R4: PASS speed when R <= 1.10.
-- R5: PASS quality when Candidate AR100 on the fixed subset >= the floor.
+- R5: PASS quality when Candidate AR100 on the fixed subset >= the floor. Use a RELATIVE floor: 0.98 x the full model AR100 on the SAME images (bench/eval_ar.py; gate.py --quality-ref). Absolute floors from the paper are not comparable across image sets.
+- (old text) PASS quality when Candidate AR100 on the fixed subset >= the floor.
   Default floor = 52.3 (paper, YOLO-World variant, CD-FSOD). Also report
   the full-model AR100 measured on the same machine. Quality FAIL overrides speed PASS.
 - R6: Every result is written as JSON with the knob values, GPU name, torch version, and image size.
