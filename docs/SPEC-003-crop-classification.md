@@ -36,6 +36,11 @@ A crop with several objects and no main object is `unknown`. imajev runs as a Py
 - D2: imajev removes its own "can't tell" mass before it reports class probabilities. The classifier therefore uses eff = p(top) * (1 - unknown_probability of that chunk). Verdict is known when the model did not abstain, eff >= min_conf, unknown_probability < unknown_max, and p(none of these) < none_max. A scene answer with unknown_probability >= unknown_max counts as an abstention (geometry hint only). Else unknown with a reason: `multi_object`, `no_clear_object`, `not_in_known`, `low_confidence`, `abstained`.
 - D3: Every verdict carries unknown_score = p(none of these) (or 1.0 for multi / no_clear) and the raw probabilities.
 
+### Parts and verification (added after the first real run)
+- P1: Detectors also box pieces of one object (eye, mouth, window). A known crop that lies inside a larger crop with the SAME label (inside >= part_inside_thr, area ratio < part_area_ratio) is a part candidate.
+- P2: Geometry only proposes. imajev confirms with one question (`whole_object` / `part_of_larger_object`); a confirmed part is marked `part_of` the larger crop and dropped from the object list. Unknown crops and crops with another label are never suppressed. A child fully inside an adult's box is kept when the model says `whole_object`.
+- V1: Optional verification (`verify=True`): ask "The main object in this image is a <label>" (noul). Below verify_min the verdict is `unknown` with reason `failed_verification`. Reason: the first run labelled a lamp as "bird" at 0.92.
+
 ### Engine
 - E1: ImajevEngine loads the model once, in-process, from the imajev checkout (scripts/playground TorchBackend, vision_decision package, calibration file). It builds the typed request, scores it, applies calibration, and returns the same dict shape as the HTTP API. No port is opened.
 - E2: The classifier talks to a `Scorer` protocol: `ask(image, payload) -> dict`. Tests use a fake scorer.
@@ -45,6 +50,7 @@ A crop with several objects and no main object is `unknown`. imajev runs as a Py
 - T1-T4 (CPU): grouping G1..G4. T5-T8: crop geometry C1..C4. T9-T11: geometric_multi M1 (cluster, single object with part, one dominant inner).
 - T12-T16 (CPU, fake scorer): M3/M4 decisions, D1 chunking, D2 reasons, one-question vs two-question flow (class question skipped on multi).
 - T17 (CPU): pipeline wires boxes -> groups -> crops -> verdicts and keeps box ids.
+- T17b-T17e (CPU): part suppression (same label inside, model veto, different label, switch off); verify rejects a wrong label; is_part.
 - T18 (GPU, user machine): ImajevEngine loads and answers one real crop; JSON saved with timing.
 - T19 (GPU): on a few real images, overlay shows verdicts. A person with face box stays one person, a shelf of items is unknown.
 

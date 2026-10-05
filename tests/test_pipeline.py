@@ -68,3 +68,48 @@ def test_pipeline_min_score_and_max_crops():
     boxes = [Box(0, 0, 20, 20, 0.9, 1), Box(30, 30, 50, 50, 0.2, 2), Box(60, 60, 90, 90, 0.8, 3)]
     res = classify_detections(img, boxes, FakeClassifier(), PipelineConfig(min_score=0.5))
     assert [r.box.id for r in res] == [1, 3]
+
+
+class LabelClassifier:
+    """Gives each crop a label by its crop size so the test can control which crops are 'person'."""
+    def __init__(self, labels, part_answer=True):
+        self.labels, self.part_answer, self.asked = labels, part_answer, 0
+        self.n = 0
+
+    def classify(self, image, geometric_multi=False):
+        label = self.labels[self.n]; self.n += 1
+        return Verdict(label, label == "unknown", None if label != "unknown" else "multi_object", 0.1)
+
+    def is_part(self, image):
+        self.asked += 1
+        return self.part_answer, 0.9 if self.part_answer else 0.1
+
+
+def test_same_label_inner_crop_is_suppressed_as_part():
+    img = Image.new("RGB", (300, 300))
+    boxes = [Box(0, 0, 200, 200, 0.9, "whole"), Box(60, 60, 100, 100, 0.8, "eye"), Box(220, 220, 280, 280, 0.7, "other")]
+    clf = LabelClassifier(["person", "person", "person"])
+    res = classify_detections(img, boxes, clf, PipelineConfig(square="none"))
+    assert [r.part_of for r in res] == [None, 0, None]
+    assert clf.asked == 1
+
+
+def test_model_can_veto_part_suppression():
+    img = Image.new("RGB", (300, 300))
+    boxes = [Box(0, 0, 200, 200, 0.9, "adult"), Box(60, 60, 100, 100, 0.8, "child")]
+    res = classify_detections(img, boxes, LabelClassifier(["person", "person"], part_answer=False), PipelineConfig(square="none"))
+    assert [r.part_of for r in res] == [None, None]
+
+
+def test_different_label_or_unknown_not_suppressed():
+    img = Image.new("RGB", (300, 300))
+    boxes = [Box(0, 0, 200, 200, 0.9, "a"), Box(60, 60, 100, 100, 0.8, "b"), Box(120, 120, 160, 160, 0.7, "c")]
+    res = classify_detections(img, boxes, LabelClassifier(["person", "dog", "unknown"]), PipelineConfig(square="none"))
+    assert [r.part_of for r in res] == [None, None, None]
+
+
+def test_suppress_off():
+    img = Image.new("RGB", (300, 300))
+    boxes = [Box(0, 0, 200, 200, 0.9, "a"), Box(60, 60, 100, 100, 0.8, "b")]
+    res = classify_detections(img, boxes, LabelClassifier(["person", "person"]), PipelineConfig(square="none", suppress_parts=False))
+    assert [r.part_of for r in res] == [None, None]

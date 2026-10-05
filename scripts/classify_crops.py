@@ -23,12 +23,15 @@ def main():
     p.add_argument("--min-score", type=float, default=0.0)
     p.add_argument("--margin", type=float, default=0.1); p.add_argument("--pad", type=float, default=8)
     p.add_argument("--square", choices=("pad", "context", "none"), default="pad"); p.add_argument("--save-crops", action="store_true")
+    p.add_argument("--no-verify", action="store_true", help="skip the is-it-really-a-<label> check")
+    p.add_argument("--keep-parts", action="store_true", help="do not suppress part crops")
     a = p.parse_args()
     known = [c.strip() for c in (a.classes.split(",") if a.classes else Path(a.classes_file).read_text().splitlines()) if c.strip()]
     engine = ImajevEngine(a.imajev_dir, rotations=a.rotations, fast=a.fast)
     print(f"imajev loaded in {engine.load_seconds:.1f}s; calibration={'yes' if engine.calibration else 'no'}")
-    clf = CropClassifier(engine, known, Config(), max_options=engine.max_options)
-    cfg = PipelineConfig(margin=a.margin, pad_px=a.pad, square=a.square, min_score=a.min_score, max_crops=a.top)
+    clf = CropClassifier(engine, known, Config(verify=not a.no_verify), max_options=engine.max_options)
+    cfg = PipelineConfig(margin=a.margin, pad_px=a.pad, square=a.square, min_score=a.min_score, max_crops=a.top,
+                         suppress_parts=not a.keep_parts)
     out_dir = Path(a.out); out_dir.mkdir(parents=True, exist_ok=True)
     report = []
     for item in json.loads(Path(a.boxes).read_text()):
@@ -42,17 +45,20 @@ def main():
         draw = ImageDraw.Draw(img)
         for r in results:
             v, b = r.verdict, r.box
+            if r.part_of is not None:
+                draw.rectangle([b.x1, b.y1, b.x2, b.y2], outline=(150, 150, 150), width=1)   # suppressed part
+                continue
             color = (255, 60, 60) if v.is_unknown else (60, 220, 60)
             draw.rectangle([b.x1, b.y1, b.x2, b.y2], outline=color, width=3)
             draw.text((b.x1 + 3, b.y1 + 3), f"{v.label}" + (f" ({v.reason})" if v.reason else f" {v.class_probs.get(v.label, 0):.2f}"), fill=color)
         img.save(out_dir / f"{stem}_overlay.png")
         report.append({"image": item["image"], "crops": [{
             "index": r.index, "box": [r.box.x1, r.box.y1, r.box.x2, r.box.y2, r.box.score], "members": len(r.member_ids),
-            "clip": list(r.rect.clip), "canvas": list(r.rect.canvas), "geometric_multi": r.geometric_multi, "label": r.verdict.label,
+            "clip": list(r.rect.clip), "canvas": list(r.rect.canvas), "geometric_multi": r.geometric_multi, "part_of": r.part_of, "p_part": r.p_part, "label": r.verdict.label,
             "is_unknown": r.verdict.is_unknown, "reason": r.verdict.reason, "unknown_score": r.verdict.unknown_score,
             "scene": r.verdict.scene_probs, "top_classes": sorted(r.verdict.class_probs.items(), key=lambda kv: -kv[1])[:3]}
             for r in results]})
-        print(stem, len(results), "crops;", sum(r.verdict.is_unknown for r in results), "unknown")
+        print(stem, len(results), "crops;", sum(r.verdict.is_unknown for r in results), "unknown;", sum(r.part_of is not None for r in results), "parts suppressed")
     (out_dir / "verdicts.json").write_text(json.dumps(report, indent=1))
 
 

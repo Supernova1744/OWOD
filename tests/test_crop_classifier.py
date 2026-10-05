@@ -129,3 +129,42 @@ def test_high_scene_unknown_counts_as_abstain_for_scene():
     assert CropClassifier(s, ["cat"]).classify(object(), geometric_multi=False).label == "cat"
     s = FakeScorer(S_ONE, [{"cat": 0.9, NONE_OPTION: 0.1}], scene_unk=0.5)
     assert CropClassifier(s, ["cat"]).classify(object(), geometric_multi=True).reason == "multi_object"
+
+
+from owod.crop_classifier import WHOLE, PART
+
+
+class ExtraScorer(FakeScorer):
+    """Adds answers for the 'part' and 'verify' questions."""
+    def __init__(self, *a, part=None, verify=None, **k):
+        super().__init__(*a, **k)
+        self.part, self.verify = part, verify
+
+    def ask(self, image, payload):
+        name = next(iter(payload["questions"]))
+        if name == "part":
+            self.calls.append(["part"])
+            return {"answers": {"part": {"type": "choice", "choice": WHOLE, "probabilities": self.part,
+                                         "unknown_probability": 0.0, "abstained": False}}}
+        if name == "verify":
+            self.calls.append(["verify"])
+            return {"answers": {"verify": {"type": "noul", "noul": self.verify, "unknown_probability": 0.0, "abstained": False}}}
+        return super().ask(image, payload)
+
+
+def test_is_part():
+    c = CropClassifier(ExtraScorer(S_ONE, [], part={WHOLE: 0.2, PART: 0.8}), ["cat"])
+    assert c.is_part(object()) == (True, 0.8)
+    c = CropClassifier(ExtraScorer(S_ONE, [], part={WHOLE: 0.7, PART: 0.3}), ["cat"])
+    assert c.is_part(object()) == (False, 0.3)
+
+
+def test_verify_rejects_confident_but_wrong_label():
+    cls = [{"bird": 0.92, NONE_OPTION: 0.08}]
+    v = CropClassifier(ExtraScorer(S_ONE, cls, verify=0.1), ["bird"], Config(verify=True)).classify(object())
+    assert v.is_unknown and v.reason == "failed_verification"
+    v = CropClassifier(ExtraScorer(S_ONE, [{"bird": 0.92, NONE_OPTION: 0.08}], verify=0.9), ["bird"], Config(verify=True)).classify(object())
+    assert v.label == "bird"
+    s = ExtraScorer(S_ONE, [{"bird": 0.92, NONE_OPTION: 0.08}], verify=0.9)      # verify off: no extra call
+    CropClassifier(s, ["bird"]).classify(object())
+    assert ["verify"] not in s.calls

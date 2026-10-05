@@ -20,6 +20,9 @@ class Config:
     min_conf: float = 0.5     # p(top class) needed for a known verdict
     none_max: float = 0.5     # p("none of these") at or above this makes it unknown
     unknown_max: float = 0.4  # imajev's own "can't tell" mass at or above this makes the answer unreliable
+    verify: bool = False      # ask "is this really a <label>?" for known verdicts (one more pass); below verify_min -> unknown
+    verify_min: float = 0.5
+    part_hi: float = 0.5      # p(part_of_larger_object) at or above this confirms a part crop
 
 
 @dataclass
@@ -41,6 +44,26 @@ def scene_payload() -> dict:
             SEVERAL: "two or more separate objects are visible and none of them clearly dominates the crop",
             NO_CLEAR: "no recognizable object, only background, texture or fragments",
         }}}}
+
+
+WHOLE, PART = "whole_object", "part_of_larger_object"
+
+
+def part_payload() -> dict:
+    return {"state": {}, "questions": {"part": {
+        "type": "choice",
+        "instructions": "Does this image show a complete object, or only one piece of a larger object?",
+        "criteria": {
+            WHOLE: "a complete object is visible, even if small or partly cut off at the edge",
+            PART: "only a piece of a larger object, for example an eye, a mouth, a wheel, a window, a handle or a sign on a vehicle",
+        }}}}
+
+
+def verify_payload(label: str) -> dict:
+    return {"state": {}, "questions": {"verify": {
+        "type": "noul",
+        "instructions": f"The main object in this image is a {label}.",
+        "criteria": {"true": f"it really is a {label}", "false": f"it is something else, or only a detail of something else"}}}}
 
 
 def chunk_names(known: List[str], max_options: int = DEFAULT_MAX_OPTIONS) -> List[List[str]]:
@@ -81,6 +104,19 @@ class CropClassifier:
         self.scorer, self.known, self.cfg = scorer, list(known), config or Config()
         self._class_payloads = class_payloads(self.known, max_options)
 
+    def is_part(self, image):
+        """-> (is_part, p_part). One extra pass; used only for crops that geometry flags as possible parts."""
+        probs, ab, unk = _choice(self.scorer.ask(image, part_payload()), "part", {WHOLE, PART})
+        if ab or unk >= self.cfg.unknown_max:
+            return False, probs[PART]          # cannot tell: keep the crop
+        return probs[PART] >= self.cfg.part_hi, probs[PART]
+
+    def _verify(self, image, label):
+        ans = self.scorer.ask(image, verify_payload(label))["answers"]["verify"]
+        if ans.get("type") != "noul":
+            raise ValueError("verify: expected a noul answer")
+        return float(ans["noul"])
+
     def classify(self, image, geometric_multi: bool = False) -> Verdict:
         c = self.cfg
         scene, scene_abstained, scene_unk = _choice(self.scorer.ask(image, scene_payload()), "scene", {ONE, SEVERAL, NO_CLEAR})
@@ -116,4 +152,8 @@ class CropClassifier:
             return Verdict(UNKNOWN, True, "not_in_known", p_none, probs, scene)
         if eff < c.min_conf or unk_of[top] >= c.unknown_max:
             return Verdict(UNKNOWN, True, "low_confidence", p_none, probs, scene)
+        if c.verify:
+            p_yes = self._verify(image, top)
+            if p_yes < c.verify_min:
+                return Verdict(UNKNOWN, True, "failed_verification", p_none, probs, scene)
         return Verdict(top, False, None, p_none, probs, scene)
