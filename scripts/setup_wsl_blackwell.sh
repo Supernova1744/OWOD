@@ -9,8 +9,18 @@ command -v uv >/dev/null || { curl -LsSf https://astral.sh/uv/install.sh | sh; e
 uv venv --python 3.10 ~/.venvs/pf-rpn
 source ~/.venvs/pf-rpn/bin/activate
 uv pip install pip setuptools wheel   # mmcv/PF-RPN build steps call pip and setuptools
-# mmcv ops build needs the CUDA toolkit (nvcc). Check it now.
-command -v nvcc >/dev/null || { echo "nvcc not found. Install CUDA toolkit 12.8 in WSL first:"; echo "  https://developer.nvidia.com/cuda-12-8-0-download-archive (Linux > x86_64 > WSL-Ubuntu)"; exit 1; }
+# mmcv ops build needs nvcc whose version matches the CUDA of the torch wheel (cu128 -> 12.8).
+# A newer system toolkit (for example 13.x) breaks the build. Use 12.8 side by side.
+export CUDA_HOME=/usr/local/cuda-12.8
+if [ ! -x "$CUDA_HOME/bin/nvcc" ]; then
+  echo "CUDA 12.8 toolkit not found at $CUDA_HOME. Install it (toolkit only, no driver):"
+  echo "  https://developer.nvidia.com/cuda-12-8-0-download-archive  (Linux > x86_64 > WSL-Ubuntu > deb network)"
+  echo "  then: sudo apt-get install -y cuda-toolkit-12-8"
+  echo "Your other CUDA versions stay installed."
+  exit 1
+fi
+export PATH="$CUDA_HOME/bin:$PATH"
+export LD_LIBRARY_PATH="$CUDA_HOME/lib64:${LD_LIBRARY_PATH:-}"
 nvcc --version | tail -2
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
 python -c "import torch;print(torch.__version__, torch.cuda.get_device_capability())"  # expect (12, 0)
