@@ -123,7 +123,7 @@ def test_check_all_parts_drops_part_without_same_label_parent():
     assert [r.part_of for r in res] == [None, None]
     clf = LabelClassifier(["bus", "car"])
     res = classify_detections(img, boxes, clf, PipelineConfig(square="none", check_all_parts=True))
-    assert [r.part_of for r in res] == [-1, -1]            # LabelClassifier says "part" for every crop
+    assert [r.part_of for r in res] == [-1, -1]            # LabelClassifier says "part" for every crop (p_part 0.9)
     assert clf.asked == 2
 
 
@@ -132,3 +132,26 @@ def test_check_all_parts_keeps_whole_objects():
     boxes = [Box(0, 0, 100, 100, 0.9, "a")]
     res = classify_detections(img, boxes, LabelClassifier(["dog"], part_answer=False), PipelineConfig(square="none", check_all_parts=True))
     assert res[0].part_of is None
+
+
+class PClassifier(LabelClassifier):
+    def __init__(self, labels, p):
+        super().__init__(labels); self.p = p
+
+    def is_part(self, image):
+        return self.p >= 0.5, self.p
+
+
+def test_noparent_part_needs_higher_probability():
+    img = Image.new("RGB", (300, 300))
+    boxes = [Box(60, 60, 100, 100, 0.8, "x")]
+    cfg = PipelineConfig(square="none", check_all_parts=True)
+    assert classify_detections(img, boxes, PClassifier(["car"], 0.68), cfg)[0].part_of is None     # below 0.75: kept
+    assert classify_detections(img, boxes, PClassifier(["car"], 0.80), cfg)[0].part_of == -1
+
+
+def test_noparent_part_at_image_border_is_kept():
+    img = Image.new("RGB", (300, 300))
+    boxes = [Box(0, 200, 100, 300, 0.8, "x")]                      # touches left and bottom border: cut-off car
+    cfg = PipelineConfig(square="none", check_all_parts=True)
+    assert classify_detections(img, boxes, PClassifier(["car"], 0.90), cfg)[0].part_of is None

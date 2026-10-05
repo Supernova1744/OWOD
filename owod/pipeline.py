@@ -21,6 +21,8 @@ class PipelineConfig:
     part_inside_thr: float = 0.8     # part of the small box inside the large box
     part_area_ratio: float = 0.7     # small box area / large box area must be below this
     confirm_parts: bool = True       # ask the model "whole or part?" before dropping (needs classifier.is_part)
+    noparent_part_thr: float = 0.75  # a part with NO detected parent needs p(part) >= this (stricter than part_hi)
+    border_px: float = 2             # a box touching the image border may be a cut-off whole object, not a part
     check_all_parts: bool = False    # ask "whole or part?" for EVERY known crop, not only geometric candidates (+1 pass each).
                                      # Catches parts whose bigger object has another label (headlight labelled "car" on a bus).
 
@@ -65,11 +67,11 @@ def classify_detections(image, boxes: Sequence[Box], classifier: CropClassifier,
         if on_crop:
             on_crop(res, crop)
     if cfg.suppress_parts:
-        _suppress_parts(out, crops, classifier, cfg)
+        _suppress_parts(out, crops, classifier, cfg, (w, h))
     return out
 
 
-def _suppress_parts(results, crops, classifier, cfg):
+def _suppress_parts(results, crops, classifier, cfg, size):
     """A known crop that lies inside a larger crop with the SAME label is a part candidate (eye in a person,
     window in a bus). Geometry only proposes; the model confirms (is_part) when confirm_parts is on.
     With check_all_parts the model is asked for every known crop; a part with no detected parent gets part_of = -1."""
@@ -87,4 +89,11 @@ def _suppress_parts(results, crops, classifier, cfg):
             is_part, r.p_part = ask(crops[r.index])
             if not is_part:
                 continue
-        r.part_of = min(outers, key=lambda o: o.box.area).index if outers else -1
+        if outers:
+            r.part_of = min(outers, key=lambda o: o.box.area).index
+            continue
+        # no detected parent: be stricter. A cut-off object at the image border looks like a "part" but is a whole.
+        b = r.box
+        at_border = b.x1 <= cfg.border_px or b.y1 <= cfg.border_px or b.x2 >= size[0] - cfg.border_px or b.y2 >= size[1] - cfg.border_px
+        if r.p_part is not None and r.p_part >= cfg.noparent_part_thr and not at_border:
+            r.part_of = -1
