@@ -1,3 +1,5 @@
+> SUPERSEDED by SPEC-003 (in-process package, crop pipeline, multi-object rule). The HTTP-style request client was removed.
+
 # SPEC-002: imajev-4b as an optional unknown-object labeller
 
 ## Goal
