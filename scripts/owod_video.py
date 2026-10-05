@@ -2,14 +2,15 @@
   python scripts/owod_video.py --video in.mp4 --out results/video/in_annotated.mp4 --classes-file results/voc20.txt \
       --pf-dir /mnt/d/OWOD/OWOD/PF-RPN --detector-python $HOME/.venvs/pf-rpn/bin/python --every-sec 1 --max-seconds 30 --top 15
 Frames are processed every --every-sec seconds (the system needs seconds per frame); the boxes of the last processed frame
-are held until the next one. No tracking. Needs opencv (pip install opencv-python-headless in the imajev venv)."""
-import argparse, json, os, shutil, subprocess, sys, tempfile, time
+are held until the next one. No tracking. Uses the ffmpeg command line for video input and output (no OpenCV)."""
+import argparse, json, os, shutil, sys, time
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 from pathlib import Path
 from PIL import Image
 from owod.crop_classifier import Config
 from owod.detector_proc import SubprocessDetector
 from owod.draw import draw_results
+from owod.ffio import VideoWriter, probe, read_frames
 from owod.pipeline import PipelineConfig
 from owod.state import OWState, UnknownStore
 from owod.system import OpenWorldSystem
@@ -29,13 +30,8 @@ def main():
     ap.add_argument("--work", default=None, help="work folder (state, store, frames); default: next to --out")
     ap.add_argument("--dry-run", action="store_true", help="only print video info and the time estimate")
     a = ap.parse_args()
-    import cv2
-
-    cap = cv2.VideoCapture(a.video)
-    if not cap.isOpened():
-        raise SystemExit(f"cannot open {a.video}")
-    n, fps = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)), cap.get(cv2.CAP_PROP_FPS) or 25.0
-    W, H = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    info = probe(a.video)
+    n, fps, W, H = info["n_frames"], info["fps"], info["width"], info["height"]
     idx = sample_indices(n, fps, a.every_sec, a.max_seconds)
     end = n if a.max_seconds is None else min(n, int(a.max_seconds * fps))
     est = len(idx) * (a.top * 0.5 + 2)
@@ -48,16 +44,10 @@ def main():
     work = Path(a.work) if a.work else out.parent / (out.stem + "_work")
     shutil.rmtree(work, ignore_errors=True); (work / "frames").mkdir(parents=True)
     wanted = set(idx); paths = {}
-    i = 0
-    while i < end:
-        ok, frame = cap.read()
-        if not ok:
-            break
+    for i, frame in enumerate(read_frames(a.video, W, H, max_frames=end)):
         if i in wanted:
             p = work / "frames" / f"f{i:07d}.png"
-            Image.fromarray(frame[:, :, ::-1]).save(p); paths[i] = str(p)
-        i += 1
-    cap.release()
+            frame.save(p); paths[i] = str(p)
     samples = sorted(paths)
 
     t0 = time.time()
@@ -82,26 +72,15 @@ def main():
               f"{sum(x.verdict.is_unknown and x.part_of is None for x in r)} unknown, {time.time() - t1:.1f} s", flush=True)
 
     # write the annotated video at the original fps; each frame shows the annotations of the last processed frame
-    cap = cv2.VideoCapture(a.video)
-    tmp = out.with_suffix(".tmp.mp4")
-    vw = cv2.VideoWriter(str(tmp), cv2.VideoWriter_fourcc(*"mp4v"), fps, (W, H))
     hm = hold_map(end, samples)
-    for i in range(end):
-        ok, frame = cap.read()
-        if not ok:
-            break
+    vw = VideoWriter(str(out), W, H, fps)
+    for i, frame in enumerate(read_frames(a.video, W, H, max_frames=end)):
         j = hm[i]
-        img = Image.fromarray(frame[:, :, ::-1])
         if j is not None:
             k = samples[j]
-            img = draw_results(img, results[k], f"green=known red=unknown | processed frame {k} ({k / fps:.1f}s)")
-        vw.write(cv2.cvtColor(__import__("numpy").array(img), cv2.COLOR_RGB2BGR))
-    vw.release(); cap.release()
-    if shutil.which("ffmpeg"):                                   # re-encode to H.264 so common players open it
-        subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(tmp), "-c:v", "libx264", "-pix_fmt", "yuv420p", str(out)], check=True)
-        tmp.unlink()
-    else:
-        tmp.replace(out)
+            frame = draw_results(frame, results[k], f"green=known red=unknown | processed frame {k} ({k / fps:.1f}s)")
+        vw.write(frame)
+    vw.close()
     summary = {"video": a.video, "frames_processed": len(samples), "every_sec": a.every_sec,
                "per_frame": {str(k): {"known": [(x.verdict.label) for x in results[k] if not x.verdict.is_unknown and x.part_of is None],
                                       "unknown": [(x.verdict.reason) for x in results[k] if x.verdict.is_unknown and x.part_of is None]}

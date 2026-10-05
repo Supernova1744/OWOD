@@ -35,3 +35,44 @@ def test_draw_results_skips_parts_and_marks_unknown():
     assert out.getpixel((100, 60)) == (255, 60, 60)         # unknown: red outline
     assert out.getpixel((20, 45)) == (0, 0, 0)              # suppressed part: nothing drawn there
     assert img.getpixel((10, 60)) == (0, 0, 0)              # the input image is not changed
+
+
+def test_parse_probe_basic_and_missing_frame_count():
+    from owod.ffio import parse_probe
+    info = {"streams": [{"codec_type": "video", "width": 1920, "height": 1080, "avg_frame_rate": "30000/1001",
+                         "nb_frames": "N/A", "duration": "10.0"}], "format": {}}
+    p = parse_probe(info)
+    assert (p["width"], p["height"]) == (1920, 1080) and p["fps"] == pytest.approx(29.97, abs=0.01) and p["n_frames"] == 300
+    info["streams"][0]["nb_frames"] = "250"
+    assert parse_probe(info)["n_frames"] == 250
+
+
+def test_parse_probe_rotation_swaps_size_and_errors():
+    from owod.ffio import parse_probe
+    s = {"codec_type": "video", "width": 1920, "height": 1080, "avg_frame_rate": "25/1", "nb_frames": "50",
+         "side_data_list": [{"rotation": -90}]}
+    p = parse_probe({"streams": [s], "format": {}})
+    assert (p["width"], p["height"]) == (1080, 1920)
+    with pytest.raises(ValueError):
+        parse_probe({"streams": [{"codec_type": "audio"}], "format": {}})
+    with pytest.raises(ValueError):
+        parse_probe({"streams": [{"codec_type": "video", "width": 2, "height": 2, "avg_frame_rate": "0/0", "r_frame_rate": "0/0"}], "format": {}})
+
+
+def test_ffmpeg_roundtrip_if_available(tmp_path):
+    import shutil
+    if not (shutil.which("ffmpeg") and shutil.which("ffprobe")):
+        pytest.skip("ffmpeg not installed here")
+    pytest.importorskip("PIL")
+    from PIL import Image
+    from owod.ffio import VideoWriter, probe, read_frames
+    out = str(tmp_path / "t.mp4")
+    w = VideoWriter(out, 64, 48, 10)
+    for c in (0, 100, 200):
+        for _ in range(4):
+            w.write(Image.new("RGB", (64, 48), (c, 0, 0)))
+    w.close()
+    info = probe(out)
+    assert (info["width"], info["height"], info["n_frames"]) == (64, 48, 12) and info["fps"] == pytest.approx(10)
+    frames = list(read_frames(out, 64, 48))
+    assert len(frames) == 12 and frames[0].getpixel((5, 5))[0] < 30 and frames[-1].getpixel((5, 5))[0] > 150
