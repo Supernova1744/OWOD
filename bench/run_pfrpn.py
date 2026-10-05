@@ -1,13 +1,54 @@
-"""Latency of PF-RPN with speed knobs, batch 1. UNTESTED on GPU (T4).
-Run inside the PF-RPN checkout (needs mmdet from that repo) with PYTHONPATH including this repo.
-Usage: python bench/run_pfrpn.py --config configs/pf-rpn/pf-rpn_coco-imagenet.py \
-  --ckpt checkpoints/pf_rpn_swinb_5p_coco_imagenet.pth --out results/pfrpn_q300.json \
-  --num-queries 300 --iters 1 --topk 2 --size 800 1333 [--fp16]"""
+"""Latency of PF-RPN with speed knobs, batch 1. Needs the PF-RPN checkout (its mmdet) on the path.
+
+Timed region = model.test_step(data): GPU normalize + backbone + transformer + head + postprocess.
+Image loading and resize are done ONCE before timing (the old version rebuilt the pipeline every call).
+The baseline (run_baseline.py) times its own transform + backbone + rpn the same way.
+
+Usage (from the PF-RPN folder):
+  python ../bench/run_pfrpn.py --config configs/pf-rpn/pf-rpn_coco-imagenet.py \
+    --ckpt checkpoints/pf_rpn_swinb_5p_coco_imagenet.pth --out ../results/pfrpn_full.json \
+    [--num-queries 300] [--iters 1] [--topk 1] [--scale 800 1333] [--fp16] [--stages]
+"""
 import argparse, json, os, sys
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+import numpy as np
 import torch
 from bench.stats import summarize
 from bench.timing import time_fn
+
+
+class StageTimer:
+    """CUDA-event timing of named submodules. Used only with --stages (adds small overhead)."""
+    def __init__(self, model, names):
+        self.pairs = {n: [] for n in names}
+        self.pending = {}
+        for n in names:
+            mod = getattr(model, n, None)
+            if mod is None:
+                self.pairs.pop(n)
+                continue
+            mod.register_forward_pre_hook(self._pre(n))
+            mod.register_forward_hook(self._post(n))
+
+    def _pre(self, n):
+        def h(_m, _i):
+            e = torch.cuda.Event(enable_timing=True); e.record(); self.pending[n] = e
+        return h
+
+    def _post(self, n):
+        def h(_m, _i, _o):
+            e = torch.cuda.Event(enable_timing=True); e.record()
+            self.pairs[n].append((self.pending.pop(n), e))
+        return h
+
+    def reset(self):
+        for v in self.pairs.values():
+            v.clear()
+
+    def summary_ms(self):
+        torch.cuda.synchronize()
+        return {n: float(np.median([s.elapsed_time(e) for s, e in v])) if v else None
+                for n, v in self.pairs.items()}
 
 
 def main():
@@ -16,13 +57,20 @@ def main():
     p.add_argument("--out", required=True)
     p.add_argument("--num-queries", type=int); p.add_argument("--iters", type=int)
     p.add_argument("--topk", type=int)
-    p.add_argument("--size", type=int, nargs=2, default=[800, 1333])
+    p.add_argument("--scale", type=int, nargs=2, default=[800, 1333], help="FixScaleResize scale")
+    p.add_argument("--img-size", type=int, nargs=2, default=[800, 1333], help="synthetic image H W")
     p.add_argument("--fp16", action="store_true")
-    p.add_argument("--runs", type=int, default=50)
+    p.add_argument("--stages", action="store_true", help="also report per-stage median ms")
+    p.add_argument("--runs", type=int, default=50); p.add_argument("--warmup", type=int, default=10)
     a = p.parse_args()
+
     from mmengine.config import Config
+    from mmengine.dataset import pseudo_collate
     from mmengine.registry import init_default_scope
+    from mmengine.dataset import Compose
     from mmdet.apis import init_detector
+    from mmdet.apis.inference import get_test_pipeline_cfg
+
     cfg = Config.fromfile(a.config)
     if a.num_queries:
         cfg.model.num_queries = a.num_queries
@@ -32,23 +80,41 @@ def main():
     if a.topk is not None:
         cfg.model.topk = a.topk
     init_default_scope("mmdet")
-    # NOTE: if num_queries changes, decoder-query weights may not load strictly; see docs.
     model = init_detector(cfg, a.ckpt, device="cuda").eval()
-    from mmdet.apis import inference_detector
-    import numpy as np
-    img = (np.random.rand(*a.size, 3) * 255).astype("uint8")
+
+    pipe_cfg = get_test_pipeline_cfg(cfg)
+    pipe_cfg[0].type = "mmdet.LoadImageFromNDArray"
+    pipe_cfg = [t for t in pipe_cfg if t["type"] != "LoadAnnotations"]
+    for t in pipe_cfg:
+        if "Resize" in t["type"]:
+            t["scale"] = tuple(a.scale)
+    pipeline = Compose(pipe_cfg)
+    img = (np.random.rand(*a.img_size, 3) * 255).astype("uint8")
+    data = pseudo_collate([pipeline(dict(img=img, img_id=0, text="object", custom_entities=False))])
+
+    timer = StageTimer(model, ["backbone", "neck", "encoder", "decoder"]) if a.stages else None
 
     @torch.no_grad()
     def run():
         with torch.autocast("cuda", dtype=torch.float16, enabled=a.fp16):
-            inference_detector(model, img, text_prompt="object")
+            model.test_step(data)
 
-    lat = time_fn(run, runs=a.runs)
-    res = {"model": "pfrpn", "knobs": {"num_queries": a.num_queries, "iters": a.iters,
-           "topk": a.topk, "fp16": a.fp16}, "latency": summarize(lat), "size": a.size,
+    lat = time_fn(run, warmup=a.warmup, runs=a.runs)
+    res = {"model": "pfrpn",
+           "knobs": {"num_queries": int(cfg.model.get("num_queries", 900)),
+                     "sp_iter_num": int(getattr(model, "sp_iter_num", -1)),
+                     "topk": int(getattr(model, "topk", -1)),
+                     "scale": list(a.scale), "fp16": a.fp16},
+           "latency": summarize(lat), "img_size": list(a.img_size),
            "gpu": torch.cuda.get_device_name(0), "torch": torch.__version__}
-    os.makedirs(os.path.dirname(a.out) or ".", exist_ok=True)
-    json.dump(res, open(a.out, "w"), indent=2)
+    if timer:
+        timer.reset()
+        for _ in range(20):
+            run()
+        res["stages_ms_median"] = timer.summary_ms()
+    os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
+    with open(a.out, "w") as f:
+        json.dump(res, f, indent=2)
     print(json.dumps(res, indent=2))
 
 

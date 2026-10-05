@@ -28,7 +28,8 @@ def main():
     res = {"model": "torchvision_rpn_r50fpn", "latency": summarize(lat), "size": a.size,
            "gpu": torch.cuda.get_device_name(0), "torch": torch.__version__}
     os.makedirs(os.path.dirname(a.out) or ".", exist_ok=True)
-    json.dump(res, open(a.out, "w"), indent=2)
+    with open(a.out, "w") as f:
+        json.dump(res, f, indent=2)
     print(json.dumps(res, indent=2))
 
 

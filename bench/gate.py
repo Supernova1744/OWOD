@@ -9,10 +9,11 @@ def main():
     p.add_argument("baseline"); p.add_argument("candidate")
     p.add_argument("--floor", type=float, default=52.3)
     p.add_argument("--max-ratio", type=float, default=1.10)
+    p.add_argument("--speed-only", action="store_true", help="exploration only: ignore quality")
     a = p.parse_args()
     b, c = json.load(open(a.baseline)), json.load(open(a.candidate))
     g = gate(c["latency"]["median_ms"], b["latency"]["median_ms"],
-             c.get("ar100", float("-inf")), a.max_ratio, a.floor)
+             float("inf") if a.speed_only else c.get("ar100", float("-inf")), a.max_ratio, a.floor)
     print(json.dumps(g, indent=2))
     print("PASS" if g["pass"] else "FAIL")
     sys.exit(0 if g["pass"] else 1)
