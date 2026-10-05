@@ -25,8 +25,13 @@ nvcc --version | tail -2
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
 python -c "import torch;print(torch.__version__, torch.cuda.get_device_capability())"  # expect (12, 0)
 pip install mmengine "numpy<2" pytest
+rm -rf /tmp/mmcv
 git clone --depth 1 https://github.com/open-mmlab/mmcv.git -b v2.1.0 /tmp/mmcv
-(cd /tmp/mmcv && TORCH_CUDA_ARCH_LIST="12.0" MMCV_WITH_OPS=1 pip install -v -e . --no-build-isolation)
+# mmcv 2.1.0 includes <THC/THCAtomics.cuh>, which new torch removed. Use the ATen header instead.
+grep -rl "THC/THCAtomics.cuh" /tmp/mmcv/mmcv/ops/csrc | xargs sed -i 's#<THC/THCAtomics.cuh>#<ATen/cuda/Atomic.cuh>#'
+uv pip install ninja
+(cd /tmp/mmcv && MAX_JOBS=4 TORCH_CUDA_ARCH_LIST="12.0" MMCV_WITH_OPS=1 pip install -v -e . --no-build-isolation 2>&1 | tee /tmp/mmcv_build.log | tail -n 40) \
+  || { echo "mmcv build failed. Send the FIRST 'error' lines:  grep -n -m5 -B2 -A8 'error' /tmp/mmcv_build.log"; exit 1; }
 git clone --depth 1 https://github.com/tangqh03/PF-RPN.git ../PF-RPN
 (cd ../PF-RPN && pip install "setuptools>=69.0.3,<81" && pip install -v -e . --no-build-isolation && pip install -r requirements.txt)
 mkdir -p ../PF-RPN/checkpoints
