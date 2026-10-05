@@ -51,6 +51,29 @@ class StageTimer:
                 for n, v in self.pairs.items()}
 
 
+def shrink_queries(model, n):
+    """Keep n of the trained content queries. The first half of the rows pairs with the confidence-ranked
+    proposals and the second half with the class-ranked ones (see _select_score_guided_queries), so
+    slice both blocks. Never rebuild the model with a smaller num_queries: the checkpoint would not load."""
+    import torch.nn as nn
+    old = model.num_queries
+    if not 0 < n <= old:
+        raise ValueError(f"num_queries must be in 1..{old}")
+    n_conf, n_cls = n // 2, n - n // 2
+    idx = torch.cat([torch.arange(0, n_conf), torch.arange(old // 2, old // 2 + n_cls)]).to(
+        model.query_embedding.weight.device)
+    w = model.query_embedding.weight.data[idx].clone()
+    model.query_embedding = nn.Embedding(n, w.shape[1]).to(w.device)
+    model.query_embedding.weight.data.copy_(w)
+    model.num_queries = n
+    if hasattr(model, "dn_query_generator"):
+        model.dn_query_generator.num_matching_queries = n
+    for holder in (model, model.bbox_head):
+        tc = getattr(holder, "test_cfg", None)
+        if tc is not None:
+            tc["max_per_img"] = n
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--config", required=True); p.add_argument("--ckpt", required=True)
@@ -59,7 +82,8 @@ def main():
     p.add_argument("--topk", type=int)
     p.add_argument("--scale", type=int, nargs=2, default=[800, 1333], help="FixScaleResize scale")
     p.add_argument("--img-size", type=int, nargs=2, default=[800, 1333], help="synthetic image H W")
-    p.add_argument("--fp16", action="store_true")
+    p.add_argument("--fp16", action="store_true"); p.add_argument("--bf16", action="store_true")
+    p.add_argument("--tf32", action="store_true", help="allow TF32 matmul")
     p.add_argument("--stages", action="store_true", help="also report per-stage median ms")
     p.add_argument("--runs", type=int, default=50); p.add_argument("--warmup", type=int, default=10)
     a = p.parse_args()
@@ -71,16 +95,17 @@ def main():
     from mmdet.apis import init_detector
     from mmdet.apis.inference import get_test_pipeline_cfg
 
+    if a.tf32:
+        torch.set_float32_matmul_precision("high")
     cfg = Config.fromfile(a.config)
-    if a.num_queries:
-        cfg.model.num_queries = a.num_queries
-        cfg.model.test_cfg = dict(max_per_img=a.num_queries)
     if a.iters is not None:
         cfg.model.sp_iter_num = a.iters
     if a.topk is not None:
         cfg.model.topk = a.topk
     init_default_scope("mmdet")
-    model = init_detector(cfg, a.ckpt, device="cuda").eval()
+    model = init_detector(cfg, a.ckpt, device="cuda").eval()   # always load with the trained 900 queries
+    if a.num_queries:
+        shrink_queries(model, a.num_queries)
 
     pipe_cfg = get_test_pipeline_cfg(cfg)
     pipe_cfg[0].type = "mmdet.LoadImageFromNDArray"
@@ -96,17 +121,18 @@ def main():
 
     @torch.no_grad()
     def run():
-        with torch.autocast("cuda", dtype=torch.float16, enabled=a.fp16):
+        with torch.autocast("cuda", dtype=torch.bfloat16 if a.bf16 else torch.float16, enabled=a.fp16 or a.bf16):
             model.test_step(data)
 
     lat = time_fn(run, warmup=a.warmup, runs=a.runs)
     res = {"model": "pfrpn",
-           "knobs": {"num_queries": int(cfg.model.get("num_queries", 900)),
+           "knobs": {"num_queries": int(model.num_queries),
                      "sp_iter_num": int(getattr(model, "sp_iter_num", -1)),
                      "topk": int(getattr(model, "topk", -1)),
-                     "scale": list(a.scale), "fp16": a.fp16},
+                     "scale": list(a.scale), "fp16": a.fp16, "bf16": a.bf16, "tf32": a.tf32},
            "latency": summarize(lat), "img_size": list(a.img_size),
-           "gpu": torch.cuda.get_device_name(0), "torch": torch.__version__}
+           "gpu": torch.cuda.get_device_name(0), "torch": torch.__version__,
+           "mmdet_file": __import__("mmdet").__file__}
     if timer:
         timer.reset()
         for _ in range(20):
