@@ -36,7 +36,7 @@ def main():
             inst = model.test_step(data)[0].pred_instances
         order = inst.scores.argsort(descending=True)[:a.top]
         boxes = torch.cat([inst.bboxes[order], inst.scores[order, None]], 1).float().cpu().tolist()
-        out.append({"image": str(f), "width": img.shape[1], "height": img.shape[0], "boxes": boxes})
+        out.append({"image": str(f.resolve()), "width": img.shape[1], "height": img.shape[0], "boxes": boxes})
         print(f.name, len(boxes), "boxes")
     Path(a.out).parent.mkdir(parents=True, exist_ok=True)
     with open(a.out, "w") as fh:
