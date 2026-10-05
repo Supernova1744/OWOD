@@ -136,7 +136,7 @@ def main():
            "knobs": {"num_queries": int(model.num_queries),
                      "sp_iter_num": int(getattr(model, "sp_iter_num", -1)),
                      "topk": int(getattr(model, "topk", -1)),
-                     "scale": list(a.scale), "fp16": a.fp16, "bf16": a.bf16, "tf32": a.tf32, "fast_predict": a.fast_predict},
+                     "scale": list(a.scale), "fp16": a.fp16, "bf16": a.bf16, "tf32": a.tf32, "fast_predict": a.fast_predict, "compile_backbone": a.compile_backbone},
            "latency": summarize(lat), "img_size": list(a.img_size),
            "gpu": torch.cuda.get_device_name(0), "torch": torch.__version__,
            "mmdet_file": __import__("mmdet").__file__}
