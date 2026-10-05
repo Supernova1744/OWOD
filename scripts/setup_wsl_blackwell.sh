@@ -4,8 +4,14 @@
 # Use torch >= 2.7 with CUDA 12.8 wheels, and build mmcv ops from source.
 set -euo pipefail
 nvidia-smi
-conda create -n pf-rpn python=3.10 -y
-source "$(conda info --base)/etc/profile.d/conda.sh"; conda activate pf-rpn
+# No conda needed: uv fetches Python 3.10 and makes a venv.
+command -v uv >/dev/null || { curl -LsSf https://astral.sh/uv/install.sh | sh; export PATH="$HOME/.local/bin:$PATH"; }
+uv venv --python 3.10 ~/.venvs/pf-rpn
+source ~/.venvs/pf-rpn/bin/activate
+uv pip install pip setuptools wheel   # mmcv/PF-RPN build steps call pip and setuptools
+# mmcv ops build needs the CUDA toolkit (nvcc). Check it now.
+command -v nvcc >/dev/null || { echo "nvcc not found. Install CUDA toolkit 12.8 in WSL first:"; echo "  https://developer.nvidia.com/cuda-12-8-0-download-archive (Linux > x86_64 > WSL-Ubuntu)"; exit 1; }
+nvcc --version | tail -2
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
 python -c "import torch;print(torch.__version__, torch.cuda.get_device_capability())"  # expect (12, 0)
 pip install mmengine "numpy<2" pytest
