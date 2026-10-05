@@ -20,6 +20,7 @@ def main():
     p.add_argument("--ann", required=True); p.add_argument("--images", required=True)
     p.add_argument("--n", type=int, default=300); p.add_argument("--out", required=True)
     p.add_argument("--fp16", action="store_true"); p.add_argument("--tf32", action="store_true")
+    p.add_argument("--compile-backbone", action="store_true", help="torch.compile the Swin backbone (experiment)")
     p.add_argument("--fast-predict", action="store_true")
     p.add_argument("--scale", type=int, nargs=2, default=[800, 1333])
     p.add_argument("--num-queries", type=int); p.add_argument("--iters", type=int); p.add_argument("--topk", type=int)
@@ -46,6 +47,8 @@ def main():
     if a.fast_predict:
         from owod.pfrpn_fast import apply_fast_predict
         apply_fast_predict(model)
+    if a.compile_backbone:
+        model.backbone = torch.compile(model.backbone)
     if a.num_queries:
         shrink_queries(model, a.num_queries)
     pc = get_test_pipeline_cfg(cfg); pc[0].type = "mmdet.LoadImageFromNDArray"

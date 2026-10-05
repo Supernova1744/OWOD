@@ -22,12 +22,14 @@ def engine_args(p):
 
 
 def make_system(a, detect_fn):
+    """Builds imajev AFTER the detector has finished, so both models are never on the GPU together."""
     from owod.imajev_engine import ImajevEngine
     eng = ImajevEngine(a.imajev_dir, rotations=a.rotations)
     state = OWState.load(a.state)
     store = UnknownStore(a.store)
     pc = PipelineConfig(max_crops=getattr(a, "top", 30), check_all_parts=True)
-    return OpenWorldSystem(detect_fn, eng, state, store, Config(verify=True), pc, max_options=eng.max_options), state
+    return OpenWorldSystem(detect_fn, eng, state, store, Config(verify=True), pc, max_options=eng.max_options,
+                           state_path=a.state), state
 
 
 def main():
@@ -35,7 +37,7 @@ def main():
     r = sub.add_parser("run"); r.add_argument("--images", required=True); r.add_argument("--state", required=True)
     r.add_argument("--store", required=True); r.add_argument("--classes-file")
     r.add_argument("--pf-dir", required=True); r.add_argument("--detector-python", required=True)
-    r.add_argument("--top", type=int, default=30); r.add_argument("--report", default=None); engine_args(r)
+    r.add_argument("--top", type=int, default=30); r.add_argument("--scale", type=int, nargs=2, default=[800, 1333]); r.add_argument("--report", default=None); engine_args(r)
     l = sub.add_parser("list"); l.add_argument("--store", required=True); l.add_argument("--status", default="unknown")
     n = sub.add_parser("learn"); n.add_argument("--state", required=True); n.add_argument("--store", required=True)
     n.add_argument("--name", required=True); n.add_argument("--ids", default=""); n.add_argument("--no-relabel", action="store_true")
@@ -57,8 +59,9 @@ def main():
             Path(a.state).parent.mkdir(parents=True, exist_ok=True); s.save(a.state)
         root = Path(a.images)
         files = sorted(str(f) for f in ([root] if root.is_file() else root.iterdir()) if f.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp"})
-        det = SubprocessDetector(a.detector_python, a.pf_dir, REPO)
-        system, _ = make_system(a, det)
+        det = SubprocessDetector(a.detector_python, a.pf_dir, REPO, scale=a.scale)
+        boxes = det(files)                      # 1) detector subprocess runs and EXITS (frees the GPU)
+        system, _ = make_system(a, lambda paths: boxes)    # 2) only then load imajev
         out = system.process_many(files)
         rep = {}
         for path, res in out.items():

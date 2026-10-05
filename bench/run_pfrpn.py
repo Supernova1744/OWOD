@@ -85,6 +85,7 @@ def main():
     p.add_argument("--fp16", action="store_true"); p.add_argument("--bf16", action="store_true")
     p.add_argument("--tf32", action="store_true", help="allow TF32 matmul")
     p.add_argument("--stages", action="store_true", help="also report per-stage median ms")
+    p.add_argument("--compile-backbone", action="store_true", help="torch.compile the Swin backbone (experiment)")
     p.add_argument("--fast-predict", action="store_true", help="owod.pfrpn_fast.apply_fast_predict (same results, no per-label syncs)")
     p.add_argument("--runs", type=int, default=50); p.add_argument("--warmup", type=int, default=10)
     a = p.parse_args()
@@ -108,6 +109,8 @@ def main():
     if a.fast_predict:
         from owod.pfrpn_fast import apply_fast_predict
         apply_fast_predict(model)
+    if a.compile_backbone:
+        model.backbone = torch.compile(model.backbone)
     if a.num_queries:
         shrink_queries(model, a.num_queries)
 

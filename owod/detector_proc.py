@@ -10,7 +10,7 @@ from .crops import Box
 
 
 class SubprocessDetector:
-    def __init__(self, python: str, pf_dir: str, repo_dir: str, top: int = 100, scale=(640, 1067),
+    def __init__(self, python: str, pf_dir: str, repo_dir: str, top: int = 100, scale=(800, 1333),
                  fp16: bool = True, fast_predict: bool = True, script: str = None, extra_args: Sequence[str] = ()):
         self.python, self.pf_dir, self.repo_dir = python, pf_dir, repo_dir
         self.script = script or str(Path(repo_dir) / "scripts" / "detect_boxes_pfrpn.py")

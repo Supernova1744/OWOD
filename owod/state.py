@@ -70,6 +70,13 @@ class UnknownStore:
                if (status is None or r["status"] == status) and (reasons is None or r["reason"] in reasons)]
         return sorted(out)
 
+    def find(self, image: str, box, tol: float = 1.0) -> Optional[int]:
+        """Id of an existing record for the same image and (nearly) the same box, else None."""
+        for r in self.records.values():
+            if r["image"] == str(image) and all(abs(a - b) <= tol for a, b in zip(r["box"][:4], box[:4])):
+                return r["id"]
+        return None
+
     def mark(self, rid: int, status: str, label: str) -> None:
         r = self.get(rid)
         r["status"], r["label"] = status, label

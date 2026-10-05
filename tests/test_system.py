@@ -128,3 +128,37 @@ def test_subprocess_detector_with_fake_script(tmp_path):  # T15
     bad = tmp_path / "bad.py"; bad.write_text("import sys; sys.exit(3)")
     with pytest.raises(RuntimeError):
         SubprocessDetector(sys.executable, str(tmp_path), str(tmp_path), script=str(bad))([img])
+
+
+def test_state_is_saved_before_records_change_even_if_relabel_crashes(tmp_path):  # advisor 3
+    calls = []
+    sysm, path = build(tmp_path, calls)
+    sysm.state_path = str(tmp_path / "state.json")
+    sysm.process_image(path)
+    blue = next(r["id"] for r in sysm.store.records.values() if r["box"][0] == 150)
+
+    class Crash(Exception):
+        pass
+    orig = sysm.classifier.classify
+    def boom(*a, **k):
+        raise Crash()
+    sysm._rebuild_orig = sysm._rebuild
+    def rebuild_then_break():
+        sysm._rebuild_orig()
+        sysm.classifier.classify = boom
+    sysm._rebuild = rebuild_then_break
+    with pytest.raises(Crash):
+        sysm.learn("bird", ids=[blue])
+    assert OWState.load(tmp_path / "state.json").known == ["cat", "bird"]      # saved before the crash
+    assert sysm.store.get(blue)["status"] == "labelled"                         # consistent with the state
+
+
+def test_recovered_split_new_vs_old_and_no_duplicates(tmp_path):  # advisor 4 6
+    sysm, path = build(tmp_path, [])
+    sysm.process_image(path)
+    n = len(sysm.store.records)
+    sysm.process_image(path)                                                    # same image again
+    assert len(sysm.store.records) == n
+    blue = next(r["id"] for r in sysm.store.records.values() if r["box"][0] == 150)
+    out = sysm.learn("bird", ids=[blue])
+    assert out["recovered_new_class"] == 1 and out["recovered_old_class"] == 0
